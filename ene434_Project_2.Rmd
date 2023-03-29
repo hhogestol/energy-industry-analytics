@@ -1,0 +1,410 @@
+---
+title: "ENE434 Term Analysis"
+author: "Candidate number:"
+date: "3.6.2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Energy Consumption in Norway: 
+## A Statistical Analysis and Forecast 
+
+## Introduction
+The purpose of this project is to analyze and forecast the power consumption in Norway. I will base my analysis on hourly power consumption data gathered from the European Network of Transmission System Operators for Electricity (ENTSO-E, 2022). In a deregulated market, the ability to forecast the electricity demand is an important success factor for the different market participants. It serves as a valuable tool for better informed bidding and purchasing decisions, and it also improves the management of the flows of electricity. Therefore, to gain a better understanding of the power consumption in the deregulated Norwegian market, I will first provide background information on ENTSO-E and power consumption. Then I will provide a summary of my findings and a short review of the literature. Next, I will examine the power consumption through a statistical summary and discuss the results. The scope of this part of my analysis is to elucidate how the power consumption fluctuates throughout the year, and if it varies more greatly during holidays than the rest of the year. Moving on, I will prepare my data for a 12-month forecast where I will utilize an ARIMA forecasting method, and then examine the results. Lastly, I will summarize my results and discuss the strengths and weaknesses of my analysis.
+
+## Background
+As mentioned, this project is based on electricity consumption data from the ENTSO-E Transparency Platform, which is a platform that provides data from European transmission system operators (TSOs). ENTSO-E consists of 35 countries and 39 member TSOs, and they are responsible for "(...) the secure and coordinated operation of Europe's electricity system." (ENTSO-E, 2022). TSOs are independently operating entities that are "(...) responsible for the bulk transmission of electric power on the main high voltage electric networks." (ENTSO-E, 2022). Generating companies, suppliers, distributors, traders, and directly connected customers are provided grid access by the TSOs. Among other roles, TSOs are also responsible for the development of grid infrastructure in some countries, and they ensure operational safety and maintenance of the system. The Norwegian TSO is Statnett SF. Their data was selected because I would like to investigate the seasonality of the power consumption in Norway, and how it might behave in the near future. More precisely, I will look for trends and investigate what we can learn from them, and then forecast the next 12 months' power consumption.
+
+## Data
+The data set is gathered from ENTSO-E (ENTSO-E, 2022) and runs from January 2015 to July 2020. It consists of hourly data and is measured in Megawatts (MW). I will begin my analysis by cleaning my work space, loading packages, and preparing the data.
+
+```{r, message = FALSE}
+### Load all packages I might need
+library(tibbletime)
+library(nortsTest)
+library(devtools)
+library(caret)
+library(forecast)
+library(fable)
+library(tseries)
+library(tidyverse)
+library(feasts)
+library(ggplot2)
+library(magrittr)
+library(zoo)
+library(data.table)
+library(lubridate)
+library(seasonal)
+library(fpp2)
+library(fpp3)
+library(urca)
+library(MuMIn)
+library(gridExtra)
+library(tseries)
+library(vars)
+library(astsa)
+library(dplyr)
+library(tibble)
+library(remotes)
+library(fpp)
+library(ForecastComb)
+library(fabletools)
+library(TSstudio)
+library(Hmisc)
+library(pastecs)
+library(skimr)
+library(xts)
+```
+
+The data for this project is provided through a CSV-file. I will now by load, clean and format the data.
+
+```{r}
+### Load, clean, and format the data 
+cons_NO = read.csv("cons-no.csv")
+
+# Convert date to datetime
+cons_NO$start <- as_datetime(cons_NO$start)
+cons_NO$end <- as_datetime(cons_NO$end)
+
+# Day of the week
+cons_NO["day"] <- as.factor(strftime(cons_NO$start, format = '%A'))
+
+# Day of the year
+cons_NO["doy"] <- as.factor(strftime(cons_NO$start, format = '%m%d'))
+
+# The final structure of the data frame
+str(cons_NO)
+```
+
+Now that I have prepared the data, I will create a training set, a test set, and a time series of the sub-weekly (hourly) time series. The training set will consist of the first four years of the six and a half year long time series, and the test set will consist of the remaining one and half years. 
+
+```{r}
+### Training set and test set 
+
+# Time series and splitting into training and test sets
+test.df <- subset(cons_NO, start >= strptime('01-01-2019', format = '%d-%m-%Y'))
+train.df <- subset(cons_NO, start < strptime('01-01-2019', format = '%d-%m-%Y'))
+ts <- msts(train.df$load, seasonal.periods = c(24, 168, 8765))
+
+ts.train <- ts(train.df$load, start=c(2015, 1), frequency=8765)
+ts.test <- ts(test.df$load, start=c(2019, 1), frequency=8765)
+```
+
+## Summary Statistics
+I will now perform a statistical analysis of the data. The goal is to explore and describe it in detail. This will also better equip me for the upcoming forecast. The data set consists of 48,819 hourly observations and two variables, which are the hourly time stamps ('start' and 'end') and 'load' (energy consumption). The time stamps are in the _hymd-format_ and the load is measured in MWh. Together, these variables make up the relevant time series for this project. They function as a measurement ('load') and as an index ('start' and 'end') (Hyndman & Athanasopoulos, 2021).
+
+First, let us have a look at some simple summary statistics of the time series.
+
+```{r}
+### Summarize the Data
+summary(train.df)
+```
+
+The median consumption during the period was 14745 MWh, and the mean consumption was 15,110 MWh, which was about half of the maximum consumption and 1.66 times the minimum. The maximum was 31722 MWh and the minimum was 9157 MWh. 
+
+Next, I would like to inspect the time series by plotting the consumption on the y-axis and the corresponding dates along the x-axis.
+
+```{r, fig.width = 10}
+# Dataframe and time series objects
+cons.ts <- xts(train.df$load, train.df$start)
+
+plot(cons.ts, 
+     main = 'Figure 1: Energy consumption trajectory', 
+     xlab = 'Date', ylab = 'Consumption (MWh)')
+```
+
+As evidenced by Figure 1, the time series has some landmark outliers. The energy consumption is visibly seasonal in terms of summer and winter, where consumption is lower during summers and higher during winters. This makes sense, seeing that Norway has a cold winter climate that necessitates heating. Andersen et al. (2013) found that in Denmark, these seasonal variations "(...) mainly come from residential and the public service sector(...)", and that the "(...) effects of summer holidays are seen within industry and the public service sector." This could be explained by the many private firms and public institutions that close down for a couple of weeks during July. This could also explain some of the pattern in Figure 1, seeing that Norway and Denmark are fairly similar societies in several regards, like in culture, institutions, and politicaø tradition. Furthermore, most Norwegian households are well-insulated, which I believe decreases the need for air-conditioning and other forms of cooling in the summer. By turning the heat off and aerating the houses through open doors and windows, most Norwegian households can achieve comfortable temperatures during the hottest days of summer. There are also some spikes in consumption throughout holidays, like during Christmas. Furthermore, the huge spikes in the plot seem somewhat arbitrary, since there's one in May 2015 and none during the following months of May. However, the remaining four spikes all occur during November from 2016-2018, which I believe is a trend that could be explained by the need for heating up homes when the cold of winter sets in. 
+
+Moving on, let us have a look at a box plot of the weekday consumption to see if it differs from weekend consumption.
+
+```{r cache = TRUE, fig.width = 10}
+# Consumption during weekdays
+ggplot(train.df, aes(day, load)) + 
+  geom_boxplot() + 
+  xlab('Day') + ylab('Consumption (MWh)') + 
+  ggtitle('Figure 2: Weekday consumption')
+```
+It looks like weekend consumption is somewhat lower than weekday consumption. This could probably be explained by a greater need for home appliance usage during the weekdays. It could also be due to people enjoying more of their days outside or on holiday during the weekends. However, the difference between weekdays and weekends is not huge, which could be explained by people's habitual need for about the same amount of energy throughout the week. This difference between weekdays and weekends is supported by Andersen et al., who found that the daily consumption is lower on non-workdays (weekends) compared to workdays. They also found that the difference is especially pronounced in the mid-day peak, which is lower on non-workdays (Andersen et al., 2013, p. 148). Furthermore, there are also some outliers on Sundays and Thursdays, where the Thursday outliers are more pronounced.
+
+Next, I am interested in looking at the aggregated average consumption by the day of the year. 
+
+```{r, fig.width = 10, fig.height = 2.5}
+# Aggregated average consumption by doy
+agg_cons_doy <- aggregate(load ~ doy, train.df, 'mean')
+
+# Adding a smoothing curve to the aggregate
+smooth_doy <- rbind(agg_cons_doy, agg_cons_doy, agg_cons_doy, agg_cons_doy, agg_cons_doy)
+smooth_doy <- lowess(smooth_doy$load, f = 1 / 45)
+l <- length(agg_cons_doy$load)
+l0 <- 2 * l + 1
+l1 <- 3 * l
+smooth_doy <- smooth_doy$y[l0:l1]
+
+# Plot
+plot(agg_cons_doy$load, 
+     type = 'l', 
+     main = 'Figure 3: Aggregated daily consumption (MWh)', 
+     xlab = 'Day of year', ylab = 'Consumption (MWh)') +
+  lines(smooth_doy, col = 'blue', lwd = 2)
+```
+Again the pattern follows the seasonal trend of more consumption during winter and less during summer. There is a spike in May, which could be explained by the national holidays during this month. We also see that consumption is greatest around Christmas and New Years Eve in late December and early January. 
+
+Moving on, I would like to create a bar plot and a boxplot to take a closer look at the smoothing errors of the model.
+
+```{r, fig.width = 10, fig.height=3}
+# Split the screen into two panels
+par(mfrow = c(1, 2))
+
+# Difference the consumption
+diff.cons <- agg_cons_doy$load - smooth_doy
+diff.abs <- abs(diff.cons)
+
+# Plots
+barplot(diff.cons,
+        main = 'Figure 4a: Smoothing error', 
+        xlab = 'Day of year',
+        ylab = 'Error')
+
+boxplot(diff.cons,
+        main = 'Figure 4b: Smoothing error', 
+        ylab = 'Error')
+```
+There looks to be approximately 14 outliers outside the upper and lower quartiles. Furthermore, it still looks like the biggest smoothing errors are associated with the aforementioned holidays. 
+
+A final step in the statistical summary before I check for autocorrelation, is to run a KPSS test. This will confirm if there is non-stationarity in the data, such that I may difference and decompose the time series. 
+```{r}
+# KPSS test
+par(mfrow=c(2,2))
+kpss.test(train.df$load) # p-value = 0.01, which is significant and thereby the time series is non-stationary
+```
+
+Summary of the KPSS test:
+```{r}
+summary(ur.kpss(train.df$load))
+```
+
+### Autocorrelation
+Moving on, I will have a look at the autocorrelation in the time series. Autocorrelation measures the linear relationship between the _lagged values_ of the time series (Hyndman & Athanasopoulos, 2021). The time series has almost 50 000 observations, so I will use a high number of lags to visualize how the correlations vary with the lags. 
+
+```{r, fig.width = 10, fig.height = 2.5}
+# Splitting the screen into two panels
+par(mfrow = c(2, 2))
+
+acf.cons <- ggAcf(train.df$load, lag = 100) + 
+  ggtitle("Figre 5a: Autocorrelation") 
+
+pacf.cons <- ggpacf(train.df$load, title = NULL) + 
+  ggtitle("Figure 5b: Partial Autocorrelation") 
+
+grid.arrange(acf.cons, pacf.cons, ncol = 2)
+```
+From the ACF and PACF plots, or _correlograms_, we can see that there is a high degree of autocorrelation in the non-stationary seasonal time series. The wavy shape of the ACF plot illustrates the seasonality of the data. There is a slight decrease in the ACF as the lags increase, which is caused by the trend in the data. Autocorrelations for small lags tend to be large and positive because observations that are close in time are also nearby in size (Hyndman & Athanasopoulos, 2018). This is evident by the PACF. Furthermore, I also need to look at the PACF to determine the AR model. Again, most of the lags are significant and the partial autocorrelation starts off high and decreases as the lags increase. Hence, there is a negative relationship between the partial autocorrelations and the lags. 
+
+Now that I have analyzed the autocorrelations of the data set, the next step in my analysis is to difference the non-stationary time series. 
+
+```{r}
+# Differencing the time series
+ndiffs(train.df$load) # there is 1 difference
+```
+
+The test confirms that there is one difference in the time series, which means that I can move on with differencing.
+
+```{r, fig.width = 10, fig.height = 3}
+# Differencing 
+train.diff <- train.df$load %>% diff(lag = 100) %>% diff()
+
+# Plot
+var.train <- train.diff
+cbind("Variable" = var.train,
+      "Seasonal\n differencing" = diff((var.train), 100),
+      "Second-order\n differencing" = diff(diff((var.train),100),)) %>%
+  autoplot(facets=TRUE) +
+  xlab("Date") + ylab("Consumption (MWh)") +
+  ggtitle("Figure 6: Consumption influenced by differencing")
+```
+The data is now differenced and the Figure 6 suggests that the data is stationary. To check if it my intuition is correct, I will re-inspect the ACF and PACF, and then run new ADF and KPSS tests. 
+
+```{r, fig.width = 8, fig.height = 4}
+# Testing for stationarity
+acf.diff <- acf(train.diff)
+pacf.diff <- pacf(train.diff)
+
+# Plot 
+par(mfrow = c(2, 2))
+plot(acf.diff, main = "Figure 7a: ACF and PACF of differenced ts")
+plot(acf.diff, main = "Figure 7b: ACF and PACF of differenced ts")
+```
+The ACF and PACF plots also suggest stationarity, but let us run the ADF and KPSS tests to be sure.
+
+```{r}
+# ADF and KPSS tests
+adf.test(train.diff) # p-value = 0.01, which indicates stationarity
+
+kpss.test(train.diff) # p-value = 0.1, which indicates stationarity
+summary(ur.kpss(train.diff, use.lag = 100))
+```
+The tests support the claim that the data is now stationary, with a p-value = 0.01 for the ADF test, and p = 0.1 for the KPSS test.
+
+### Decomposing the Time Series
+According to the above tests, the time series is now stationary and ready for decomposing. The reason why I would like to decompose the time series is to remove the seasonality. I will start by removing weekly seasonality and then yearly seasonality.
+
+```{r, fig.width = 10, fig.height = 5}
+weekly_ts <- ts(ts, frequency = 7)
+dcmp_weekly_ts <- decompose(weekly_ts)
+autoplot(dcmp_weekly_ts, main = 'Figure 8: Weekly decomposition of additive time series')
+
+# Consumption minus weekly seasonality
+train.df$load_min_weekly <- train.df$load - as.numeric(dcmp_weekly_ts$season)
+```
+After removing the weekly seasonality, we see that the trend is smoother except for one significant spike at around t = 500. Furthermore, when the trend and seasonal component is subtracted from the data, the remainder components is what is left (Hyndman & Athanasopoulos, 2018). The "black box" of the seasonal component tells us that it is present throughout the whole time series, which is no surprise seeing that the time series is seasonal. In addition, judging by the scales of the the components, it is reasonable that the data, trend and remainder components have similar looking relative scale components on the right hand side of Figure 8. In comparison, the seasonal component has a far smaller scale, which is why the relative scale component is much larger. 
+
+In the next step of my analysis, I will decompose the yearly seasonality and plot the yearly decomposition of the additive time series. I will also create the yearly time series with decomposed seasonality for further analysis.
+
+```{r, fig.width = 10, fig.height = 5}
+yearly_ts <- ts(subset(train.df, doy != '0229')$load_min_weekly, frequency = 365)
+dcmp_yearly_ts <- decompose(yearly_ts)
+autoplot(dcmp_yearly_ts, main = 'Figure 9: Yearly decomposition of additive time series')
+
+days_of_year <- which(train.df$doy != '02-29')
+feb_29 <- which(train.df$doy == '02-29')
+train.df$load_minus_week_year[days_of_year] <- train.df$load_minus_week_year[days_of_year] - as.numeric(dcmp_yearly_ts$season)
+
+# Feb. 29 value infills (to compensate for leap years)
+train.df$load_minus_week_year[feb_29] <- train.df$load_minus_week_year[feb_29]
+
+# Yearly time series with decomposed seasonality
+train.df$load_minus_week_year <- train.df$load_min_weekly - as.numeric(dcmp_yearly_ts$season)
+```
+Compared to the weekly decomposition, Figure 9 suggests that the yearly seasonality has a relatively greater effect on the time series. The relative scales of the data, trend and remainder components are larger, which is evidence of this claim. However, the scale of the seasonal component is also larger, which could mean that the increase in the three other components' scales are just relative adjustments. Furthermore, the seasonal component is more detailed as Figure 9 is more "zoomed in" than in Figure 8. 
+
+Now that I have identified the weekly and yearly seasonalities, I will create a new time series exclusive of these seasonalities. 
+
+```{r, cache = TRUE, fig.width = 10, fig.height = 3}
+par(mfrow = c(1, 1))
+
+# Time series without seasonalities
+ts_minus_week_year <- ts(train.df$load_minus_week_year, frequency = 1)
+cons_ts_minus_week_year <- xts(train.df$load_minus_week_year, train.df$start)
+
+# Plot of new time series
+autoplot(cons_ts_minus_week_year, 
+     main = 'Figure 10: Energy consumption without seasonality', 
+     xlab = 'Date', ylab = 'Consumption (MWh)')
+```
+The new time series looks similar to the seasonal non-stationary time series, but I assume there is a difference seeing that the ADF and KPSS tests indicate that the time series is now stationary. However, just in case I missed something, I will have a quick glance at the decomposed time series.
+
+```{r, fig.width=10, fig.height = 3}
+# ACF and PACF for the decomposed time series
+ggtsdisplay(ts_minus_week_year,
+            plot.type = "partial",
+            main = "Figure 11: ACF & PACF plot for decomposed time series",
+            smooth = TRUE)
+```
+Judging by Figure 11, I believe the time series is now stationary. This brings me to back to the question of error rates. After decomposing the non-stationary and seasonal time series, I would like to see if the error rate has decreased. This means I will need to aggregate the decomposed consumption by day of year, and then once again compute a smoothing curve for a plot of the decomposed time series.
+
+```{r, fig.width = 10, fig.height = 2.5}
+# Aggregated consumption
+agg_cons_doy_minus_week_year <- aggregate(load_minus_week_year ~ doy, train.df, 'mean')
+
+# Computing the smooth curve for the time series
+smooth_doy <- rbind(agg_cons_doy_minus_week_year, agg_cons_doy_minus_week_year, agg_cons_doy_minus_week_year, agg_cons_doy_minus_week_year, agg_cons_doy_minus_week_year)
+smooth_doy <- lowess(smooth_doy$load_minus_week_year, f = 1 / 45)
+l <- length(agg_cons_doy_minus_week_year$load_minus_week_year)
+l0 <- 2 * l + 1
+l1 <- 3 * l
+smooth_doy <- smooth_doy$y[l0:l1]
+
+# Plot
+par(mfrow = c(1, 1))
+plot(agg_cons_doy_minus_week_year$load_minus_week_year, 
+     type = 'l', 
+     main = 'Figure 12: Aggregated daily consumption', 
+     xlab = 'Date', ylab = 'Consumption (MWh)') +
+  lines(smooth_doy, col = 'blue', lwd = 2)
+```
+It looks like the error rate is slightly reduced, and that the smoothing curve somewhat follows the time series more closely. However, I do not believe this figure is much different from Figure 3, which could be explained by a weak seasonal impact on energy consumption taken as an aggregated whole. Yet, if the error rate is reduced, what do they look like after removing the seasonality?
+
+```{r, fig.width = 30, fig.height = 10}
+par(mfrow = c(1, 2))
+
+diff_minus_seas <- agg_cons_doy_minus_week_year$load_minus_week_year - smooth_doy
+diff_abs_minus_seas <- abs(diff_minus_seas)
+
+# Plot
+boxplot(diff_minus_seas, 
+        main = 'Figure 13: Post-decomposition smoothing error', 
+        ylab = 'Error')
+```
+
+There are still some errors, but judging by Figure 13, I believe they are slightly reduced in number and distance from the box. If this is the case, then Figure 13 corresponds with the results in Figure 12. This moves me on to the next part of this analysis, which is to create a seasonal ARIMA and then forecast the time series. 
+
+## Seasonal ARIMA
+The first step of this process is to create a seasonal ARIMA model. They include additional seasonal terms and are written as _(p,d,q)(P,D,Q)m_, where the _(p,d,q)_ is the non-seasonal part of the model, the _(P,D,Q)m_ is the seasonal part, and _m_ equals the seasonal period (e.g., the number of observations per year) (Hyndman & Athanasopoulos, 2021). To determine the seasonal orders for the ARIMA model, one must strictly pay attention to the seasonal lags. For this process, I will rely on the auto-ARIMA function, which will experiment with different seasonal orders until it detects the best fit. The function selects the appropriate model by determining the parameters with minimized second-order estimate of the Akaike information criteria (AICc).
+
+```{r, cache = TRUE}
+# Seasonal ARIMA
+arima.sa <- auto.arima(ts_minus_week_year, trace = T, 
+           stepwise = F, 
+           approximation = F)
+```
+
+According to the auto-ARIMA function, the best model is an ARIMA(3,1,2).
+
+## Forecast
+Now that I have identified the best fitting model, I can move on with my attempt to forecast the time series for the next year. This amounts to about 8765 (24*365.25) hourly periods. 
+
+```{r, fig.width = 10, fig.height = 5}
+# Forecast
+arima.fit <- Arima(ts_minus_week_year, order = c(3, 1, 2), list(order = c(1, 1, 1), period = 7))
+autoplot(forecast(arima.fit, h=8765), 
+         main = 'Figure 14: Forecast with seasonal ARIMA(3,1,2)')
+```
+The forecast trends towards an increase in hourly energy consumption for the following year. However, the drift leaves plenty of room for variance, which leads me to believe that energy consumption will follow a similar pattern to previous years. Furthermore, the forecast is not a deterministic model. I would expect the seasonal variation and occurrence of outliers to continue, which means that real energy consumption will vary throughout the forecast period. 
+
+```{r, fig.width = 15, fig.height = 5}
+# Inverse characteristics plot
+autoplot(arima.sa) + 
+  ggtitle("Figure 15: ARIMA Model: Inverse characteristics") +
+  ylab("lm(1/root)") +
+  xlab("Re(1/root)")
+```
+The inverse roots of the AR and MA are all inside the circle, which illustrates that the identified ARIMA is a good fit. However, some of the orange dots lie close to the circle, which means that model is not "perfect". Knowing that the identified model is the best possible ARIMA model, I believe this indicates that I could have chosen a better forecasting method. One that I presume is better suited for sub-daily data.
+
+### Model Accuracy
+The final step after having computed a forecast for the time series is to check the accuracy of the model. For this particular ARIMA model, the relevant accuracy measurements is RMSE, MAPE and MASE. 
+
+```{r}
+# How accurate is the forecasting model?
+accuracy.model <- rbind(accuracy(arima.sa)[1,c("RMSE", "MAPE", "MASE")])
+rownames(accuracy.model) <- c("ARIMA")
+colnames(accuracy.model) <- c("RMSE", "MAPE", "MASE")
+accuracy.model
+
+summary(accuracy.model)
+```
+
+For the seasonal ARIMA(3,1,2) forecast, the RMSE is about 405.905, MAPE is 1.487, and MASE is 0.732. In general, lower accuracy measurements are the better. Based on the identified model being the best alternative, these measurements are the lowest alternatives and thereby have the optimal values out of all the possible models identified. 
+
+## Results and Limitations
+Before concluding the analysis, I will discuss its results and limitations. Firstly, the time series analysis went well, but I wonder if the data source would have been better suited for my analysis if I could partition the data by different categories of customers. That would presumably require non-aggregated data, where all local power meter data would be treated as their own separate time series. The second and more substantial limitation of this analysis, is that the seasonal ARIMA model is probably not optimal. Sub-daily (hourly) data often involve multiple patterns, and are challenging to forecast. Methods that handle such complex seasonality, like TBATS, STL or dynamic harmonic regression, are better suited for this job. However, they only allow for regular seasonality, which means they do not capture irregularities like Easter (Hyndman & Athanasopoulos, 2018). With a better understanding of how dynamic harmonic regressions work, I could have produced a more accurate and better fitting forecasting model for my needs. 
+
+## Conclusion
+In conclusion, I have learned from the time series analysis that energy consumption in Norway is greatly affected by seasonality and holidays. The week-to-week consumption is fairly stable in the short term, but fluctuates significantly throughout the year. It is lower during summer and higher during winter. Furthermore, the consumption also increases during Easter, national holidays in and around May, Christmas, and New Year's Eve. From my attempt to forecast the next year of energy consumption, I believe that it will remain stable and closely resemble the previous years, or slightly increase. If the latter is true, it will not be a significant increase due to the path of trend and the drift. Lastly, the forecast leaves much to be desired, and I am not confident that my forecasting method is optimal for this sub-daily time series. However, the forecast illustrates the capabilities of the model, and served as a great learning experience. 
+
+
+## Bibliography 
+
+Andersen, F.M., Larsen, H.V. & Gaardestrup, R.B. (2013). Long term forecasting of hourly electricity consumption in local areas in Denmark. _Applied Energy_, 110 (2013), 147-162. https://doi.org/10.1016/j.apenergy.2013.04.046
+
+Hyndman, R.J., & Athanasopoulos, G. (2018). _Forecasting: Principles and Practice (2nd ed)._ Sydney: OTexts.com 
+
+Hyndman, R.J., & Athanasopoulos, G. (2021). _Forecasting: Principles and Practice (3rd ed)._ Sydney: OTexts.com 
+
+The European Network of Transmission System Operators for Electricity (2022, April 16). About ENTSO-E. https://www.entsoe.eu/about/inside-entsoe/objectives/ 
+
+The European Network of Transmission System Operators for Electricity (2022, May 11). ENTSO-E Member Companies. https://www.entsoe.eu/about/inside-entsoe/members/
+
+The European Network of Transmission System Operators for Electricity (2022, April 16). ENTSO-E Transparency Platform. https://transparency.entsoe.eu/  
