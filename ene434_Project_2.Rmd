@@ -1,6 +1,6 @@
 ---
 title: "ENE434 Term Analysis"
-author: "Candidate number:"
+author: "hhogestol"
 date: "3.6.2022"
 output: pdf_document
 ---
