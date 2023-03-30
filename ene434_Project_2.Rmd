@@ -1,5 +1,5 @@
 ---
-title: "ENE434 Term Analysis"
+title: "ENE434 Project"
 author: "hhogestol"
 date: "3.6.2022"
 output: pdf_document
